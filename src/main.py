@@ -1,5 +1,3 @@
-import time
-
 import numpy as np
 import taichi as ti
 from scipy.sparse import csc_matrix
@@ -9,100 +7,120 @@ from praxis import *
 
 ti.init(arch=ti.metal)
 
-n_grid = 32
-beam_x, beam_y = 6, 13
-beam_width, beam_height = 20, 6
+grid_dimensions = 32
+beam_starting_x = 6
+beam_starting_y = 13
+beam_width = 20
+beam_height = 6
 
 n_particles = beam_width * beam_height * 4
 
-dx, inv_dx = 1 / float(n_grid), float(n_grid)
+dx, inv_dx = 1 / float(grid_dimensions), float(grid_dimensions)
 dt = 1e-4
 gravity = 20.0
-p_vol, p_rho = (dx * 0.5) ** 2, 1
-p_mass = p_vol * p_rho
-E, nu = 0.1e4, 0.2  # Young's modulus and Poisson's ratio
-mu, la = E / (2 * (1 + nu)), E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
-x = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
-v = ti.Vector.field(2, dtype=float, shape=n_particles)  # velocity
-C = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)  # affine velocity field
-F = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)  # deformation gradient
-color = ti.field(dtype=int, shape=n_particles)  # color id
-Jp = ti.field(dtype=float, shape=n_particles)  # plastic deformation
-grid_v = ti.Vector.field(
-    2, dtype=float, shape=(n_grid, n_grid)
-)  # grid node momentum/velocity
-grid_m = ti.field(dtype=float, shape=(n_grid, n_grid))  # grid node mass
-grid_i = ti.field(dtype=int, shape=(n_grid, n_grid))  # grid node index
+
+point_volume = dx * 0.5
+point_density = 1
+p_mass = point_volume * point_density
+
+youngs_modulus = 0.1e4
+poissons_ratio = 0.2
+
+mu = youngs_modulus / (2 * (1 + poissons_ratio))
+lambda_ = (
+    youngs_modulus * poissons_ratio / ((1 + poissons_ratio) * (1 - 2 * poissons_ratio))
+)
+position = ti.Vector.field(2, dtype=float, shape=n_particles)
+velocity = ti.Vector.field(2, dtype=float, shape=n_particles)
+affine_velocity = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)
+deformation_gradient = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)
+color = ti.field(dtype=int, shape=n_particles)
+plastic_deformation = ti.field(dtype=float, shape=n_particles)
+grid_velocity = ti.Vector.field(2, dtype=float, shape=(grid_dimensions, grid_dimensions))
+grid_mass = ti.field(dtype=float, shape=(grid_dimensions, grid_dimensions))
+grid_index = ti.field(dtype=int, shape=(grid_dimensions, grid_dimensions))
 
 
 @ti.kernel
-def cleanGrid():
-    for i, j in grid_m:
-        grid_v[i, j] = [0, 0]
-        grid_m[i, j] = 0
+def clean_grid():
+    for i, j in grid_mass:
+        grid_velocity[i, j] = [0, 0]
+        grid_mass[i, j] = 0
 
 
 @ti.kernel
 def particle_to_grid():
-    for p in x:
-        base = (x[p] * inv_dx - 0.5).cast(int)
-        fx = x[p] * inv_dx - base.cast(float)
+    for p in position:
+        base = (position[p] * inv_dx - 0.5).cast(int)
+        fx = position[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
-        F[p] = (ti.Matrix.identity(ti.f32, 2) + dt * C[p]) @ F[p]
-        R, S = ti.polar_decompose(F[p])
-        Jp[p] = Jp[p] * (1 + dt * C[p].trace())
+        deformation_gradient[p] = (
+            ti.Matrix.identity(ti.f32, 2) + dt * affine_velocity[p]
+        ) @ deformation_gradient[p]
+        R, S = ti.polar_decompose(deformation_gradient[p])
+        plastic_deformation[p] = plastic_deformation[p] * (
+            1 + dt * affine_velocity[p].trace()
+        )
         cauchy = (
-            2 * mu * (F[p] - R)
-            + la * (R.transpose() @ F[p] - ti.Matrix.identity(ti.f32, 2)).trace() * R
-        ) @ F[p].transpose()
-        stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * cauchy
-        affine = stress + p_mass * C[p]
+            2 * mu * (deformation_gradient[p] - R)
+            + lambda_
+            * (
+                R.transpose() @ deformation_gradient[p] - ti.Matrix.identity(ti.f32, 2)
+            ).trace()
+            * R
+        ) @ deformation_gradient[p].transpose()
+        stress = (-dt * point_volume * 4 * inv_dx * inv_dx) * cauchy
+        affine = stress + p_mass * affine_velocity[p]
         for i, j in ti.static(ti.ndrange(3, 3)):
             offset = ti.Vector([i, j])
             dpos = (offset.cast(float) - fx) * dx
             weight = w[i][0] * w[j][1]
-            grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
-            grid_m[base + offset] += weight * p_mass
+            grid_velocity[base + offset] += weight * (
+                p_mass * velocity[p] + affine @ dpos
+            )
+            grid_mass[base + offset] += weight * p_mass
 
 
 @ti.kernel
 def grid_update(g: ti.f32):
-    for i, j in grid_m:
-        if grid_m[i, j] > 0:
-            grid_v[i, j] = (1 / grid_m[i, j]) * grid_v[i, j]  # Momentum to velocity
-            grid_v[i, j][1] -= dt * g
+    for i, j in grid_mass:
+        if grid_mass[i, j] > 0:
+            grid_velocity[i, j] = (1 / grid_mass[i, j]) * grid_velocity[
+                i, j
+            ]  # Momentum to velocity
+            grid_velocity[i, j][1] -= dt * g
 
-        # boundary
-        if i < 3 and grid_v[i, j][0] < 0:
-            grid_v[i, j][0] = 0
-        if i > n_grid - 3 and grid_v[i, j][0] > 0:
-            grid_v[i, j][0] = 0
-        if j < 3 and grid_v[i, j][1] < 0:
-            grid_v[i, j][1] = 0
-        if j > n_grid - 3 and grid_v[i, j][1] > 0:
-            grid_v[i, j][1] = 0
+        # Sticky boundary conditions
+        if i < 3 and grid_velocity[i, j][0] < 0:
+            grid_velocity[i, j][0] = 0
+        if i > grid_dimensions - 3 and grid_velocity[i, j][0] > 0:
+            grid_velocity[i, j][0] = 0
+        if j < 3 and grid_velocity[i, j][1] < 0:
+            grid_velocity[i, j][1] = 0
+        if j > grid_dimensions - 3 and grid_velocity[i, j][1] > 0:
+            grid_velocity[i, j][1] = 0
 
         # fixed left side of the beam
-        if i < beam_x + 3:
-            grid_v[i, j] = [0, 0]
+        if i < beam_starting_x + 3:
+            grid_velocity[i, j] = [0, 0]
 
 
 @ti.kernel
 def grid_to_particle():
-    for p in x:
-        base = (x[p] * inv_dx - 0.5).cast(int)
-        fx = x[p] * inv_dx - base.cast(float)
+    for p in position:
+        base = (position[p] * inv_dx - 0.5).cast(int)
+        fx = position[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1.0) ** 2, 0.5 * (fx - 0.5) ** 2]
         new_v = ti.Vector.zero(ti.f32, 2)
         new_C = ti.Matrix.zero(ti.f32, 2, 2)
         for i, j in ti.static(ti.ndrange(3, 3)):
             dpos = ti.Vector([i, j]).cast(float) - fx
-            g_v = grid_v[base + ti.Vector([i, j])]
+            g_v = grid_velocity[base + ti.Vector([i, j])]
             weight = w[i][0] * w[j][1]
             new_v += weight * g_v
             new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
-        v[p], C[p] = new_v, new_C
-        x[p] += dt * v[p]
+        velocity[p], affine_velocity[p] = new_v, new_C
+        position[p] += dt * velocity[p]
 
 
 @ti.kernel
@@ -110,75 +128,84 @@ def initialize():
     for i in range(beam_width * 2):
         for j in range(beam_height * 2):
             p_count = j + i * beam_height * 2
-            x[p_count] = ti.Matrix(
+            position[p_count] = ti.Matrix(
                 [
-                    (float(beam_x) + i * 0.5 + 0.25) * dx,
-                    (float(beam_y) + j * 0.5 + 0.25) * dx,
+                    (float(beam_starting_x) + i * 0.5 + 0.25) * dx,
+                    (float(beam_starting_y) + j * 0.5 + 0.25) * dx,
                 ]
             )
             color[p_count] = 1
-            v[p_count] = ti.Matrix([0, 0])
-            F[p_count] = ti.Matrix([[1, 0], [0, 1]])
-            Jp[p_count] = 1
+            velocity[p_count] = ti.Matrix([0, 0])
+            deformation_gradient[p_count] = ti.Matrix([[1, 0], [0, 1]])
+            plastic_deformation[p_count] = 1
 
 
 @ti.kernel
 def particle_to_grid_static():
-    for p in x:
-        base = (x[p] * inv_dx - 0.5).cast(int)
-        fx = x[p] * inv_dx - base.cast(float)
+    for p in position:
+        base = (position[p] * inv_dx - 0.5).cast(int)
+        fx = position[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
-        R, S = ti.polar_decompose(F[p])
+        R, S = ti.polar_decompose(deformation_gradient[p])
         cauchy = (
-            2 * mu * (F[p] - R)
-            + la * (R.transpose() @ F[p] - ti.Matrix.identity(ti.f32, 2)).trace() * R
-        ) @ F[p].transpose()
-        affine = (-p_vol * 4 * inv_dx * inv_dx) * cauchy
+            2 * mu * (deformation_gradient[p] - R)
+            + lambda_
+            * (
+                R.transpose() @ deformation_gradient[p] - ti.Matrix.identity(ti.f32, 2)
+            ).trace()
+            * R
+        ) @ deformation_gradient[p].transpose()
+        affine = (-point_volume * 4 * inv_dx * inv_dx) * cauchy
         for i, j in ti.static(ti.ndrange(3, 3)):
             offset = ti.Vector([i, j])
             dpos = (offset.cast(float) - fx) * dx
             weight = w[i][0] * w[j][1]
-            grid_v[base + offset] += weight * (affine @ dpos)
-            grid_m[base + offset] += weight * p_mass
+            grid_velocity[base + offset] += weight * (affine @ dpos)
+            grid_mass[base + offset] += weight * p_mass
 
 
 def compute_active_dof_rows_and_cols():
-    for i in range(0, n_grid):
-        for j in range(0, n_grid):
-            grid_i[i, j] = -1
+    for i in range(0, grid_dimensions):
+        for j in range(0, grid_dimensions):
+            grid_index[i, j] = -1
 
     rn = 0
-    for i in range(0, n_grid):
-        for j in range(0, n_grid):
-            if grid_m[i, j] > 0 and i >= beam_x + 3:
-                grid_i[i, j] = rn
+    for i in range(0, grid_dimensions):
+        for j in range(0, grid_dimensions):
+            if grid_mass[i, j] > 0 and i >= beam_starting_x + 3:
+                grid_index[i, j] = rn
                 rn = rn + 1
 
     cn = 0
     for i in range(0, n_particles):
-        if x[i][0] > (beam_x + 1) * dx:  # extra columns for particles
+        if position[i][0] > (beam_starting_x + 1) * dx:  # extra columns for particles
             cn = cn + 1
 
     return rn, cn
 
 
 def get_sparse_matrix_info_2D():
-    start_time = time.time()
     arr_len = 0
     for p in range(0, n_particles):
-        if x[p][0] > (beam_x + 1) * dx:
-            basex = int(x[p][0] * inv_dx - 0.5)
-            basey = int(x[p][1] * inv_dx - 0.5)
+        if position[p][0] > (beam_starting_x + 1) * dx:
+            basex = int(position[p][0] * inv_dx - 0.5)
+            basey = int(position[p][1] * inv_dx - 0.5)
             fx = np.array(
-                [float(x[p][0] * inv_dx - basex), float(x[p][1] * inv_dx - basey)]
+                [
+                    float(position[p][0] * inv_dx - basex),
+                    float(position[p][1] * inv_dx - basey),
+                ]
             )
             w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
             for i in range(0, 3):
                 for j in range(0, 3):
-                    offset = np.array([i, j]).astype(np.float)
+                    offset = np.array([i, j]).astype(float)
                     dpos = (offset - fx) * dx
                     weight = w[i][0] * w[j][1]
-                    if grid_m[basex + i, basey + j] > 0 and basex + i >= beam_x + 3:
+                    if (
+                        grid_mass[basex + i, basey + j] > 0
+                        and basex + i >= beam_starting_x + 3
+                    ):
                         arr_len = arr_len + 1
 
     row = np.zeros(arr_len * 4)
@@ -187,20 +214,26 @@ def get_sparse_matrix_info_2D():
     arr_len = 0
     col_num = 0
     for p in range(0, n_particles):
-        if x[p][0] > (beam_x + 1) * dx:
-            basex = int(x[p][0] * inv_dx - 0.5)
-            basey = int(x[p][1] * inv_dx - 0.5)
+        if position[p][0] > (beam_starting_x + 1) * dx:
+            basex = int(position[p][0] * inv_dx - 0.5)
+            basey = int(position[p][1] * inv_dx - 0.5)
             fx = np.array(
-                [float(x[p][0] * inv_dx - basex), float(x[p][1] * inv_dx - basey)]
+                [
+                    float(position[p][0] * inv_dx - basex),
+                    float(position[p][1] * inv_dx - basey),
+                ]
             )
             w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
             for i in range(0, 3):
                 for j in range(0, 3):
-                    offset = np.array([i, j]).astype(np.float)
+                    offset = np.array([i, j]).astype(float)
                     dpos = (offset - fx) * dx
                     weight = w[i][0] * w[j][1]
-                    if grid_m[basex + i, basey + j] > 0 and basex + i >= beam_x + 3:
-                        row_id = grid_i[basex + i, basey + j]
+                    if (
+                        grid_mass[basex + i, basey + j] > 0
+                        and basex + i >= beam_starting_x + 3
+                    ):
+                        row_id = grid_index[basex + i, basey + j]
                         col_id = col_num
                         row[arr_len * 4 + 0] = row_id * 2 + 0
                         col[arr_len * 4 + 0] = col_id * 3 + 0
@@ -225,11 +258,11 @@ def get_sparse_matrix_info_2D():
 def get_active_DOF_rest_forces(row_num):
     rhs = np.zeros(row_num * 2)
     row_num = 0
-    for i in range(0, n_grid):
-        for j in range(0, n_grid):
-            if grid_m[i, j] > 0 and i >= beam_x + 3:
+    for i in range(0, grid_dimensions):
+        for j in range(0, grid_dimensions):
+            if grid_mass[i, j] > 0 and i >= beam_starting_x + 3:
                 rhs[row_num * 2 + 0] = 0
-                rhs[row_num * 2 + 1] = gravity * grid_m[i, j]
+                rhs[row_num * 2 + 1] = gravity * grid_mass[i, j]
                 row_num = row_num + 1
     return rhs
 
@@ -245,13 +278,13 @@ def evaluate_affine_mapping(f00, f11, f10):
     R = U @ Vt
     S = Vt.T @ np.diag(S) @ Vt
     cauchy = (
-        2 * mu * (localF - R) + la * np.trace(R.T @ localF - np.eye(2)) * R
+        2 * mu * (localF - R) + lambda_ * np.trace(R.T @ localF - np.eye(2)) * R
     ) @ localF.T
-    affine = (-p_vol * 4 * inv_dx * inv_dx) * cauchy
+    affine = (-point_volume * 4 * inv_dx * inv_dx) * cauchy
     return affine
 
 
-def findSol(A0):
+def find_solution(A0):
     n = 3
     t0 = 1e-20
     h0 = 1
@@ -274,43 +307,45 @@ def findSol(A0):
 
 @ti.kernel
 def test_particle_to_grid_static():
-    for p in x:
-        base = (x[p] * inv_dx - 0.5).cast(int)
-        fx = x[p] * inv_dx - base.cast(float)
+    for p in position:
+        base = (position[p] * inv_dx - 0.5).cast(int)
+        fx = position[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
-        affine = F[p]
+        affine = deformation_gradient[p]
         for i, j in ti.static(ti.ndrange(3, 3)):
             offset = ti.Vector([i, j])
             dpos = (offset.cast(float) - fx) * dx
             weight = w[i][0] * w[j][1]
-            grid_v[base + offset] += weight * (affine @ dpos)
-            grid_m[base + offset] += weight * p_mass
+            grid_velocity[base + offset] += weight * (affine @ dpos)
+            grid_mass[base + offset] += weight * p_mass
 
 
 def verify_global_solver(c):
-    cleanGrid()
+    clean_grid()
     col_num = 0
     for p in range(0, n_particles):
-        if x[p][0] >= (beam_x + 1) * dx:
-            F[p][0, 0] = c[col_num * 3 + 0]
-            F[p][1, 1] = c[col_num * 3 + 1]
-            F[p][0, 1] = c[col_num * 3 + 2]
-            F[p][1, 0] = c[col_num * 3 + 2]
+        if position[p][0] >= (beam_starting_x + 1) * dx:
+            deformation_gradient[p][0, 0] = c[col_num * 3 + 0]
+            deformation_gradient[p][1, 1] = c[col_num * 3 + 1]
+            deformation_gradient[p][0, 1] = c[col_num * 3 + 2]
+            deformation_gradient[p][1, 0] = c[col_num * 3 + 2]
             col_num = col_num + 1
 
     test_particle_to_grid_static()
 
-    for i in range(0, n_grid):
-        for j in range(0, n_grid):
-            if grid_m[i, j] > 0 and i >= beam_x + 3:
-                if not np.isclose(grid_v[i, j][0], 0, atol=1e-6):
-                    print("Error in global step: ", i, j, grid_v[i, j][0] - 0)
-                if not np.isclose(grid_v[i, j][1], gravity * grid_m[i, j], atol=1e-6):
+    for i in range(0, grid_dimensions):
+        for j in range(0, grid_dimensions):
+            if grid_mass[i, j] > 0 and i >= beam_starting_x + 3:
+                if not np.isclose(grid_velocity[i, j][0], 0, atol=1e-6):
+                    print("Error in global step: ", i, j, grid_velocity[i, j][0] - 0)
+                if not np.isclose(
+                    grid_velocity[i, j][1], gravity * grid_mass[i, j], atol=1e-6
+                ):
                     print(
                         "Error in global step: ",
                         i,
                         j,
-                        grid_v[i, j][1] - gravity * grid_m[i, j],
+                        grid_velocity[i, j][1] - gravity * grid_mass[i, j],
                     )
 
 
@@ -346,7 +381,6 @@ def sagfree_init():
     row_num, col_num = compute_active_dof_rows_and_cols()
     row, col, dat = get_sparse_matrix_info_2D()
     A_sp = csc_matrix((dat, (row, col)), shape=(row_num * 2, col_num * 3))
-    At_sp = csc_matrix((dat, (col, row)), shape=(col_num * 3, row_num * 2))
 
     # get rhs vector
     b = get_active_DOF_rest_forces(row_num)
@@ -360,7 +394,9 @@ def sagfree_init():
     # solve the local stage
     res_array = np.zeros(col_num * 3)
     for i in range(0, col_num):
-        res = findSol(np.array([[c[i * 3], c[i * 3 + 2]], [c[i * 3 + 2], c[i * 3 + 1]]]))
+        res = find_solution(
+            np.array([[c[i * 3], c[i * 3 + 2]], [c[i * 3 + 2], c[i * 3 + 1]]])
+        )
         res_array[i * 3 + 0] = res[0]
         res_array[i * 3 + 1] = res[1]
         res_array[i * 3 + 2] = res[2]
@@ -371,11 +407,11 @@ def sagfree_init():
     # copy the results into F
     col_num = 0
     for p in range(0, n_particles):
-        if x[p][0] >= (beam_x + 1) * dx:
-            F[p][0, 0] = res_array[col_num * 3 + 0]
-            F[p][1, 1] = res_array[col_num * 3 + 1]
-            F[p][0, 1] = res_array[col_num * 3 + 2]
-            F[p][1, 0] = res_array[col_num * 3 + 2]
+        if position[p][0] >= (beam_starting_x + 1) * dx:
+            deformation_gradient[p][0, 0] = res_array[col_num * 3 + 0]
+            deformation_gradient[p][1, 1] = res_array[col_num * 3 + 1]
+            deformation_gradient[p][0, 1] = res_array[col_num * 3 + 2]
+            deformation_gradient[p][1, 0] = res_array[col_num * 3 + 2]
             col_num = col_num + 1
 
 
@@ -390,12 +426,12 @@ while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
     frame = frame + 1
 
     for s in range(int(2e-3 // dt)):
-        cleanGrid()
+        clean_grid()
         particle_to_grid()
         grid_update(gravity)
         grid_to_particle()
-    gui.circles(x.to_numpy(), radius=1.5, color=0xED553B)
+    gui.circles(position.to_numpy(), radius=1.5, color=0xED553B)
 
     gui.show()
 
-    cleanGrid()
+    clean_grid()
