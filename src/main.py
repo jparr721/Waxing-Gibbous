@@ -23,7 +23,7 @@ point_volume = dx * 0.5
 point_density = 1
 p_mass = point_volume * point_density
 
-youngs_modulus = 0.1e4
+youngs_modulus = 1_000
 poissons_ratio = 0.2
 
 mu = youngs_modulus / (2 * (1 + poissons_ratio))
