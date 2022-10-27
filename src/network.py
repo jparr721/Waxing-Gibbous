@@ -7,7 +7,6 @@ from loguru import logger
 from tensorflow.python.keras import Input, Model, Sequential
 from tensorflow.python.keras import layers as L
 from tensorflow.python.keras.callbacks import EarlyStopping, History
-from tensorflow.python.keras.optimizers import adam_v2
 
 _MODEL_OUTPUT_PATH: Final[str] = "cnn_model.h5"
 _BATCH_SIZE: Final[int] = 20

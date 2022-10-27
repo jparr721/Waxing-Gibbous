@@ -7,7 +7,7 @@ from praxis import *
 
 ti.init(arch=ti.metal)
 
-grid_dimensions = 32
+grid_dimensions = 64
 beam_starting_x = 6
 beam_starting_y = 13
 beam_width = 20
@@ -425,11 +425,11 @@ while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
         gravity = -20.0 * np.sin(frame)
     frame = frame + 1
 
-    # for s in range(int(2e-3 // dt)):
-    #     clean_grid()
-    #     particle_to_grid()
-    #     grid_update(gravity)
-    #     grid_to_particle()
+    for s in range(int(2e-3 // dt)):
+        clean_grid()
+        particle_to_grid()
+        grid_update(gravity)
+        grid_to_particle()
     gui.circles(position.to_numpy(), radius=1.5, color=0xED553B)
 
     gui.show()
