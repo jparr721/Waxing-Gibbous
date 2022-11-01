@@ -7,13 +7,23 @@ from praxis import *
 
 ti.init(arch=ti.metal)
 
-grid_dimensions = 32
-beam_starting_x = 6
-beam_starting_y = 13
-beam_width = 20
-beam_height = 6
+# Flag to activate the fluid solver
+use_fluid_solver = False
 
-n_particles = beam_width * beam_height * 20
+if use_fluid_solver:
+    grid_dimensions = 32
+    beam_starting_x = 3
+    beam_starting_y = 3
+    beam_width = 20
+    beam_height = 6
+else:
+    grid_dimensions = 32
+    beam_starting_x = 6
+    beam_starting_y = 12
+    beam_width = 20
+    beam_height = 6
+
+n_particles = beam_width * beam_height * 4
 
 dx, inv_dx = 1 / float(grid_dimensions), float(grid_dimensions)
 dt = 1e-4
@@ -39,7 +49,6 @@ plastic_deformation = ti.field(dtype=float, shape=n_particles)
 grid_velocity = ti.Vector.field(2, dtype=float, shape=(grid_dimensions, grid_dimensions))
 grid_mass = ti.field(dtype=float, shape=(grid_dimensions, grid_dimensions))
 grid_index = ti.field(dtype=int, shape=(grid_dimensions, grid_dimensions))
-use_fluid_solver = True
 
 
 @ti.kernel
@@ -101,9 +110,10 @@ def grid_update(g: ti.f32):
         if j > grid_dimensions - 3 and grid_velocity[i, j][1] > 0:
             grid_velocity[i, j][1] = 0
 
-        # fixed left side of the beam
-        if i < beam_starting_x + 3:
-            grid_velocity[i, j] = [0, 0]
+        if not use_fluid_solver:
+            # Fixed left side of the beam for elastic sim
+            if i < beam_starting_x + 3:
+                grid_velocity[i, j] = [0, 0]
 
 
 @ti.kernel
@@ -381,10 +391,6 @@ def verify_local_solver(res_array, col_num, c):
             )
 
 
-####################################################################
-# start from here
-####################################################################
-
 initialize()
 
 
@@ -431,7 +437,11 @@ def sagfree_init():
 sagfree_init()
 gui = ti.GUI("Sagfree elastic beam", res=512, background_color=0x222222)
 
+frame = 0
 while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
+    # After optimization, begin increasing the load pressure
+    if frame > 100:
+        gravity += 10
     for s in range(25):
         clean_grid()
         particle_to_grid()
@@ -440,3 +450,4 @@ while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
     gui.circles(position.to_numpy(), radius=2, color=0xED553B)
     gui.show()
     clean_grid()
+    frame += 1
