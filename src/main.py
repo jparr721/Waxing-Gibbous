@@ -7,13 +7,13 @@ from praxis import *
 
 ti.init(arch=ti.metal)
 
-grid_dimensions = 64
+grid_dimensions = 32
 beam_starting_x = 6
 beam_starting_y = 13
 beam_width = 20
 beam_height = 6
 
-n_particles = beam_width * beam_height * 4
+n_particles = beam_width * beam_height * 20
 
 dx, inv_dx = 1 / float(grid_dimensions), float(grid_dimensions)
 dt = 1e-4
@@ -39,6 +39,7 @@ plastic_deformation = ti.field(dtype=float, shape=n_particles)
 grid_velocity = ti.Vector.field(2, dtype=float, shape=(grid_dimensions, grid_dimensions))
 grid_mass = ti.field(dtype=float, shape=(grid_dimensions, grid_dimensions))
 grid_index = ti.field(dtype=int, shape=(grid_dimensions, grid_dimensions))
+use_fluid_solver = True
 
 
 @ti.kernel
@@ -119,8 +120,20 @@ def grid_to_particle():
             weight = w[i][0] * w[j][1]
             new_v += weight * g_v
             new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
+
+        # Advect the velocity and positions
         velocity[p], affine_velocity[p] = new_v, new_C
         position[p] += dt * velocity[p]
+
+        if use_fluid_solver:
+            # Fluid update
+            U, sig, V = ti.svd(deformation_gradient[p])
+            J = 1.0
+            for d in ti.static(range(2)):
+                J *= sig[d, d]
+                # Reset deformation gradient to avoid numerical instability
+                # in fluid solvers
+                deformation_gradient[p] = ti.Matrix.identity(float, 2) * ti.sqrt(J)
 
 
 @ti.kernel
@@ -412,26 +425,18 @@ def sagfree_init():
             deformation_gradient[p][1, 1] = res_array[col_num * 3 + 1]
             deformation_gradient[p][0, 1] = res_array[col_num * 3 + 2]
             deformation_gradient[p][1, 0] = res_array[col_num * 3 + 2]
-            col_num = col_num + 1
+            col_num += 1
 
 
 sagfree_init()
 gui = ti.GUI("Sagfree elastic beam", res=512, background_color=0x222222)
 
-frame = 0
 while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
-
-    if frame > 200:
-        gravity = -20.0 * np.sin(frame)
-    frame = frame + 1
-
-    for s in range(int(2e-3 // dt)):
+    for s in range(25):
         clean_grid()
         particle_to_grid()
         grid_update(gravity)
         grid_to_particle()
-    gui.circles(position.to_numpy(), radius=1.5, color=0xED553B)
-
+    gui.circles(position.to_numpy(), radius=2, color=0xED553B)
     gui.show()
-
     clean_grid()
