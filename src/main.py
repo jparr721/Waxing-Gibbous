@@ -173,21 +173,12 @@ def particle_to_grid_static():
         base = (position[p] * inv_dx - 0.5).cast(int)
         fx = position[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
-        R, S = ti.polar_decompose(deformation_gradient[p])
-        cauchy = (
-            2 * mu * (deformation_gradient[p] - R)
-            + lambda_
-            * (
-                R.transpose() @ deformation_gradient[p] - ti.Matrix.identity(ti.f32, 2)
-            ).trace()
-            * R
-        ) @ deformation_gradient[p].transpose()
-        affine = (-point_volume * 4 * inv_dx * inv_dx) * cauchy
         for i, j in ti.static(ti.ndrange(3, 3)):
             offset = ti.Vector([i, j])
-            dpos = (offset.cast(float) - fx) * dx
             weight = w[i][0] * w[j][1]
-            grid_velocity[base + offset] += weight * (affine @ dpos)
+
+            # Zero deformation static position always has zero velocity
+            grid_velocity[base + offset].fill(0)
             grid_mass[base + offset] += weight * p_mass
 
 
@@ -201,13 +192,13 @@ def compute_active_dof_rows_and_cols():
         for j in range(0, grid_dimensions):
             if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
                 grid_index[i, j] = rn
-                rn = rn + 1
+                rn += 1
 
     cn = 0
     print(n_particles)
     for i in range(0, n_particles):
         if position[i][0] > (beam_starting_x + 1) * dx:  # extra columns for particles
-            cn = cn + 1
+            cn += 1
 
     return rn, cn
 
@@ -401,11 +392,10 @@ initialize()
 
 def sagfree_init():
     # get lhs matrix
-    binarize_grid(grid_velocity.to_numpy())
+    binarize_grid(grid_mass.to_numpy())
     particle_to_grid_static()
-    binarize_grid(grid_velocity.to_numpy())
+    binarize_grid(grid_mass.to_numpy())
     row_num, col_num = compute_active_dof_rows_and_cols()
-    print(row_num, col_num)
     row, col, dat = get_sparse_matrix_info_2D()
     A_sp = csc_matrix((dat, (row, col)), shape=(row_num * 2, col_num * 3))
 
@@ -448,7 +438,7 @@ gui = ti.GUI("Sagfree elastic beam", res=512, background_color=0x222222)
 frame = 0
 while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
     # After optimization, begin increasing the load pressure
-    if frame > 100:
+    if frame > 200:
         gravity += 10
     for s in range(25):
         clean_grid()
