@@ -437,9 +437,18 @@ gui = ti.GUI("Sagfree elastic beam", res=512, background_color=0x222222)
 
 frame = 0
 while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
-    # After optimization, begin increasing the load pressure
-    if frame > 200:
+    gui.get_event()
+
+    if gui.is_pressed("w", ti.GUI.UP):
         gravity += 10
+        print("current gravity: ", gravity)
+    elif gui.is_pressed("s", ti.GUI.DOWN):
+        gravity -= 10
+        print("current gravity: ", gravity)
+    elif gui.is_pressed(" ", ti.GUI.SPACE):
+        gravity = -gravity
+        print("inverted gravity to: ", gravity)
+
     for s in range(25):
         clean_grid()
         particle_to_grid()
