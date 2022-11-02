@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import taichi as ti
 from scipy.sparse import csc_matrix
@@ -388,9 +390,6 @@ def verify_local_solver(res_array, col_num, c):
             )
 
 
-initialize()
-
-
 def sagfree_init():
     # get lhs matrix
     binarize_grid(grid_mass.to_numpy())
@@ -433,32 +432,35 @@ def sagfree_init():
             col_num += 1
 
 
-sagfree_init()
-gui = ti.GUI("Sagfree elastic beam", res=512, background_color=0x222222)
+if __name__ == "__main__":
+    use_fluid_solver = sys.argv[1] == "fluid" if len(sys.argv) > 1 else False
+    initialize()
+    sagfree_init()
+    gui = ti.GUI("Sagfree elastic beam", res=512, background_color=0x222222)
 
-frame = 0
-print("w - Increase gravity by 10")
-print("s - Decrease gravity by 10")
-print("spacebar - Invert gravity")
-while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
-    gui.get_event()
+    frame = 0
+    print("w - Increase gravity by 10")
+    print("s - Decrease gravity by 10")
+    print("spacebar - Invert gravity")
+    while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
+        gui.get_event()
 
-    if gui.is_pressed("w", ti.GUI.UP):
-        gravity += 10
-        print("current gravity: ", gravity)
-    elif gui.is_pressed("s", ti.GUI.DOWN):
-        gravity -= 10
-        print("current gravity: ", gravity)
-    elif gui.is_pressed(" ", ti.GUI.SPACE):
-        gravity = -gravity
-        print("inverted gravity to: ", gravity)
+        if gui.is_pressed("w", ti.GUI.UP):
+            gravity += 10
+            print("current gravity: ", gravity)
+        elif gui.is_pressed("s", ti.GUI.DOWN):
+            gravity -= 10
+            print("current gravity: ", gravity)
+        elif gui.is_pressed(" ", ti.GUI.SPACE):
+            gravity = -gravity
+            print("inverted gravity to: ", gravity)
 
-    for s in range(25):
+        for s in range(25):
+            clean_grid()
+            particle_to_grid()
+            grid_update(gravity)
+            grid_to_particle()
+        gui.circles(position.to_numpy(), radius=2, color=0xED553B)
+        gui.show()
         clean_grid()
-        particle_to_grid()
-        grid_update(gravity)
-        grid_to_particle()
-    gui.circles(position.to_numpy(), radius=2, color=0xED553B)
-    gui.show()
-    clean_grid()
-    frame += 1
+        frame += 1
