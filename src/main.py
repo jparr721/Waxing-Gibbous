@@ -218,15 +218,14 @@ def get_sparse_matrix_info_2D():
             w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
             for i in range(0, 3):
                 for j in range(0, 3):
-                    offset = np.array([i, j]).astype(float)
-                    dpos = (offset - fx) * dx
-                    weight = w[i][0] * w[j][1]
                     if (
                         grid_mass[basex + i, basey + j] > 0
                         and basex + i >= beam_starting_x + PADDING_AMOUNT
                     ):
-                        arr_len = arr_len + 1
+                        arr_len += 1
 
+    # The goal here is to build the linear system of all the subsystems for each particle
+    # so that we can solve the least squares problem
     row = np.zeros(arr_len * 4)
     col = np.zeros(arr_len * 4)
     dat = np.zeros(arr_len * 4)
@@ -270,7 +269,7 @@ def get_sparse_matrix_info_2D():
                         col[arr_len * 4 + 3] = col_id * 3 + 1
                         dat[arr_len * 4 + 3] = weight * dpos[1]
                         arr_len = arr_len + 1
-            col_num = col_num + 1
+            col_num += 1
     return row, col, dat
 
 
@@ -309,6 +308,8 @@ def find_solution(A0):
     h0 = 1
     prin = 0
 
+    # Use praxis linear rootfinding problem to evaluate the
+    # linear solution for the mapping between the forces and the deformation
     def f(r, n):
         A = evaluate_affine_mapping(r[0], r[1], r[2])
         diff = A - A0
