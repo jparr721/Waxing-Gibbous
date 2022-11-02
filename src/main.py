@@ -436,6 +436,9 @@ sagfree_init()
 gui = ti.GUI("Sagfree elastic beam", res=512, background_color=0x222222)
 
 frame = 0
+print("w - Increase gravity by 10")
+print("s - Decrease gravity by 10")
+print("spacebar - Invert gravity")
 while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
     gui.get_event()
 
