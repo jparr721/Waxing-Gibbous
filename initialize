@@ -1,0 +1,13 @@
+#!/bin/bash
+
+set -euox pipefail
+
+if [ -d "venv" ];
+then
+    echo "Updating dependencies"
+    source venv/bin/activate && pip install -r requirements.txt
+    echo "Done"
+else
+    echo "Creating virtual environment"
+    virtualenv venv && source venv/bin/activate && pip install -r requirements.txt
+fi

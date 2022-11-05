@@ -436,7 +436,7 @@ def sagfree_init():
 
 
 def main(
-    solver: str = typer.Argument("solid"),
+    solver: str = typer.Argument("solid", help="'solid' or 'fluid' (case sensitive)"),
     quiet: bool = typer.Option(False, help="Display debug logs"),
 ):
     global use_fluid_solver, gravity
