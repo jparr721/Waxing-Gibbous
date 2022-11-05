@@ -4,6 +4,7 @@ import numpy as np
 import taichi as ti
 import typer
 from loguru import logger
+from rich import print
 from rich.console import Console
 from rich.progress import Progress, track
 from rich.table import Table
@@ -189,8 +190,8 @@ def particle_to_grid_static():
 
 
 def compute_active_dof_rows_and_cols():
-    for i in range(0, grid_dimensions):
-        for j in range(0, grid_dimensions):
+    for i in range(grid_dimensions):
+        for j in range(grid_dimensions):
             grid_index[i, j] = -1
 
     rn = 0
@@ -202,7 +203,7 @@ def compute_active_dof_rows_and_cols():
 
     cn = 0
     for i in range(0, n_particles):
-        if position[i][0] > (beam_starting_x + 1) * dx:  # extra columns for particles
+        if position[i][0] > (beam_starting_x + 1) * dx:
             cn += 1
 
     return rn, cn
@@ -210,17 +211,10 @@ def compute_active_dof_rows_and_cols():
 
 def get_sparse_matrix_info_2D():
     arr_len = 0
-    for p in range(0, n_particles):
+    for p in range(n_particles):
         if position[p][0] > (beam_starting_x + 1) * dx:
             basex = int(position[p][0] * inv_dx - 0.5)
             basey = int(position[p][1] * inv_dx - 0.5)
-            fx = np.array(
-                [
-                    float(position[p][0] * inv_dx - basex),
-                    float(position[p][1] * inv_dx - basey),
-                ]
-            )
-            w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
             for i in range(0, 3):
                 for j in range(0, 3):
                     if (
@@ -236,7 +230,7 @@ def get_sparse_matrix_info_2D():
     dat = np.zeros(arr_len * 4)
     arr_len = 0
     col_num = 0
-    for p in range(0, n_particles):
+    for p in range(n_particles):
         if position[p][0] > (beam_starting_x + 1) * dx:
             basex = int(position[p][0] * inv_dx - 0.5)
             basey = int(position[p][1] * inv_dx - 0.5)
@@ -273,7 +267,7 @@ def get_sparse_matrix_info_2D():
                         row[arr_len * 4 + 3] = row_id * 2 + 1
                         col[arr_len * 4 + 3] = col_id * 3 + 1
                         dat[arr_len * 4 + 3] = weight * dpos[1]
-                        arr_len = arr_len + 1
+                        arr_len += 1
             col_num += 1
     return row, col, dat
 
@@ -313,7 +307,7 @@ def find_solution(A0):
     h0 = 1
     prin = 0
 
-    # Use praxis linear rootfinding problem to evaluate the
+    # Use praxis linear rootfinding alg to evaluate the
     # linear solution for the mapping between the forces and the deformation
     def f(r, n):
         A = evaluate_affine_mapping(r[0], r[1], r[2])
