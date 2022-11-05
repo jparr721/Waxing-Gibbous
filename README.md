@@ -1,5 +1,5 @@
 # Waxing-Gibbous
-🤫🤭 Neural Network Sag-Free Initialization??? (You Won't Believe Number 5!!)
+🤫🤭 Neural Network Sag-Free Initialization???
 
 ## Running
 Running this is super easy
