@@ -4,7 +4,9 @@ import numpy as np
 import taichi as ti
 import typer
 from loguru import logger
+from rich.console import Console
 from rich.progress import Progress, track
+from rich.table import Table
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import lsqr
 
@@ -460,21 +462,26 @@ def main(
     gui = ti.GUI("Sagfree elastic beam", res=512, background_color=0x222222)
 
     frame = 0
-    print("w - Increase gravity by 10")
-    print("s - Decrease gravity by 10")
-    print("spacebar - Invert gravity")
+    table = Table("Key", "Description", title="Keybindings")
+    table.add_row("w", "Increase simulation gravity by 10")
+    table.add_row("s", "Decrease simulation gravity by 10")
+    table.add_row("spacebar", "Invert simulation gravity")
+    table.add_row("escape", "Exit the simulation")
+
+    console = Console()
+    console.print(table)
+
     while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
         gui.get_event()
-
         if gui.is_pressed("w", ti.GUI.UP):
             gravity += 10
-            print("current gravity: ", gravity)
+            logger.info(f"current gravity {gravity}")
         elif gui.is_pressed("s", ti.GUI.DOWN):
             gravity -= 10
-            print("current gravity: ", gravity)
+            logger.info(f"current gravity {gravity}")
         elif gui.is_pressed(" ", ti.GUI.SPACE):
             gravity = -gravity
-            print("inverted gravity to: ", gravity)
+            logger.info(f"current gravity {gravity}")
 
         for _ in range(25):
             clean_grid()
