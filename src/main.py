@@ -2,10 +2,12 @@ import sys
 
 import numpy as np
 import taichi as ti
+import typer
+from loguru import logger
+from rich.progress import Progress, track
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import lsqr
 
-from dataset import binarize_grid
 from praxis import *
 
 ti.init(arch=ti.metal)
@@ -197,7 +199,6 @@ def compute_active_dof_rows_and_cols():
                 rn += 1
 
     cn = 0
-    print(n_particles)
     for i in range(0, n_particles):
         if position[i][0] > (beam_starting_x + 1) * dx:  # extra columns for particles
             cn += 1
@@ -355,46 +356,52 @@ def verify_global_solver(c):
 
     test_particle_to_grid_static()
 
-    for i in range(0, grid_dimensions):
-        for j in range(0, grid_dimensions):
-            if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
-                if not np.isclose(grid_velocity[i, j][0], 0, atol=1e-6):
-                    print("Error in global step: ", i, j, grid_velocity[i, j][0] - 0)
-                if not np.isclose(
-                    grid_velocity[i, j][1], gravity * grid_mass[i, j], atol=1e-6
-                ):
-                    print(
-                        "Error in global step: ",
-                        i,
-                        j,
-                        grid_velocity[i, j][1] - gravity * grid_mass[i, j],
-                    )
+    with Progress() as progress:
+        task = progress.add_task("Verifying global solver", total=grid_dimensions)
+        for i in range(grid_dimensions):
+            for j in range(0, grid_dimensions):
+                if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
+                    if not np.isclose(grid_velocity[i, j][0], 0, atol=1e-6):
+                        progress.console.print(
+                            "Error in global step: ", i, j, grid_velocity[i, j][0] - 0
+                        )
+                    if not np.isclose(
+                        grid_velocity[i, j][1], gravity * grid_mass[i, j], atol=1e-6
+                    ):
+                        progress.console.print(
+                            "Error in global step: ",
+                            i,
+                            j,
+                            grid_velocity[i, j][1] - gravity * grid_mass[i, j],
+                        )
+            progress.advance(task)
 
 
 def verify_local_solver(res_array, col_num, c):
-    for i in range(0, col_num):
-        affine = evaluate_affine_mapping(
-            res_array[i * 3 + 0], res_array[i * 3 + 1], res_array[i * 3 + 2]
-        )
-        res_vec = np.array([affine[0, 0], affine[1, 1], affine[1, 0]])
-        tar_vec = np.array([c[i * 3], c[i * 3 + 1], c[i * 3 + 2]])
-        if not np.allclose(res_vec, tar_vec, atol=1e-6):
-            print(
-                "Error in local step: ",
-                c[i * 3],
-                c[i * 3 + 1],
-                c[i * 3 + 2],
-                res_vec,
-                tar_vec,
-                res_vec - tar_vec,
+    with Progress() as progress:
+        task = progress.add_task("Verifying local solver", total=col_num)
+        for i in range(col_num):
+            affine = evaluate_affine_mapping(
+                res_array[i * 3 + 0], res_array[i * 3 + 1], res_array[i * 3 + 2]
             )
+            res_vec = np.array([affine[0, 0], affine[1, 1], affine[1, 0]])
+            tar_vec = np.array([c[i * 3], c[i * 3 + 1], c[i * 3 + 2]])
+            if not np.allclose(res_vec, tar_vec, atol=1e-6):
+                progress.console.print(
+                    "Error in local step: ",
+                    c[i * 3],
+                    c[i * 3 + 1],
+                    c[i * 3 + 2],
+                    res_vec,
+                    tar_vec,
+                    res_vec - tar_vec,
+                )
+            progress.advance(task)
 
 
 def sagfree_init():
     # get lhs matrix
-    binarize_grid(grid_mass.to_numpy())
     particle_to_grid_static()
-    binarize_grid(grid_mass.to_numpy())
     row_num, col_num = compute_active_dof_rows_and_cols()
     row, col, dat = get_sparse_matrix_info_2D()
     A_sp = csc_matrix((dat, (row, col)), shape=(row_num * 2, col_num * 3))
@@ -423,7 +430,7 @@ def sagfree_init():
 
     # copy the results into F
     col_num = 0
-    for p in range(0, n_particles):
+    for p in track(range(0, n_particles), description="Optimizing Deformation Gradient"):
         if position[p][0] >= (beam_starting_x + 1) * dx:
             deformation_gradient[p][0, 0] = res_array[col_num * 3 + 0]
             deformation_gradient[p][1, 1] = res_array[col_num * 3 + 1]
@@ -432,8 +439,22 @@ def sagfree_init():
             col_num += 1
 
 
-if __name__ == "__main__":
-    use_fluid_solver = sys.argv[1] == "fluid" if len(sys.argv) > 1 else False
+def main(
+    solver: str = typer.Argument("solid"),
+    quiet: bool = typer.Option(False, help="Display debug logs"),
+):
+    global use_fluid_solver, gravity
+
+    if solver != "solid" and solver != "liquid":
+        logger.error("Solver must be 'solid' or 'liquid'")
+        exit(1)
+
+    use_fluid_solver = solver == "fluid"
+
+    if quiet:
+        logger.remove()
+        logger.add(sys.stderr, level="INFO")
+
     initialize()
     sagfree_init()
     gui = ti.GUI("Sagfree elastic beam", res=512, background_color=0x222222)
@@ -455,7 +476,7 @@ if __name__ == "__main__":
             gravity = -gravity
             print("inverted gravity to: ", gravity)
 
-        for s in range(25):
+        for _ in range(25):
             clean_grid()
             particle_to_grid()
             grid_update(gravity)
@@ -464,3 +485,7 @@ if __name__ == "__main__":
         gui.show()
         clean_grid()
         frame += 1
+
+
+if __name__ == "__main__":
+    typer.run(main)
