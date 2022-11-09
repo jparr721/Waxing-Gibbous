@@ -23,7 +23,7 @@ else:
 
 _MODEL_OUTPUT_PATH: Final[str] = "cnn_model.h5"
 _BATCH_SIZE: Final[int] = 20
-_EPOCHS: Final[int] = 1
+_EPOCHS: Final[int] = 1000
 _LOSS: Final[str] = "mae"
 _CHANNELS: Final[int] = 4
 _VALIDATION_SPLIT: Final[float] = 0.3
