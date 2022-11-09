@@ -1,19 +1,14 @@
+import os
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Union
 
-import matplotlib.pyplot as plt
-import numpy as np
-from scipy.sparse import csc_matrix
 
-
-def binarize_grid(grid_entry: Union[np.ndarray, csc_matrix]):
-    grid_entry = grid_entry.todense()
-    grid_entry[grid_entry.nonzero()] = 1
-    plt.imsave("grid_entry_dbg.png", grid_entry)
-
-
+@dataclass
 class Dataset(object):
     def __init__(self):
-        pass
+        self.input_dataset = []
+        self.output_dataset = []
 
-    def __repr__(self):
+    def load_from_folder(self, inp: Union[str, Path], outp: Union[str, Path]):
         pass

@@ -130,3 +130,6 @@ dmypy.json
 
 # Remove outputted images
 *.png
+
+# dataset stuff
+dataset/*

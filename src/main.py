@@ -1,4 +1,7 @@
+import os
 import sys
+from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import taichi as ti
@@ -6,12 +9,18 @@ import typer
 from loguru import logger
 from rich import print
 from rich.console import Console
-from rich.progress import Progress, track
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, track
 from rich.table import Table
+from rich.traceback import install
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import lsqr
 
 from praxis import *
+
+# Set up rich to MITM all errors
+install()
+
+app = typer.Typer()
 
 ti.init(arch=ti.metal)
 
@@ -161,17 +170,17 @@ def grid_to_particle():
 def initialize():
     for i in range(beam_width * 2):
         for j in range(beam_height * 2):
-            p_count = j + i * beam_height * 2
-            position[p_count] = ti.Matrix(
+            idx = j + i * beam_height * 2
+            position[idx] = ti.Matrix(
                 [
-                    (float(beam_starting_x) + i * 0.5 + 0.25) * dx,
-                    (float(beam_starting_y) + j * 0.5 + 0.25) * dx,
+                    (beam_starting_x + i * 0.5 + ti.random()) * dx,
+                    (beam_starting_y + j * 0.5 + ti.random()) * dx,
                 ]
             )
-            color[p_count] = 1
-            velocity[p_count] = ti.Matrix([0, 0])
-            deformation_gradient[p_count] = ti.Matrix([[1, 0], [0, 1]])
-            plastic_deformation[p_count] = 1
+            color[idx] = 1
+            velocity[idx] = ti.Matrix([0, 0])
+            deformation_gradient[idx] = ti.Matrix([[1, 0], [0, 1]])
+            plastic_deformation[idx] = 1
 
 
 @ti.kernel
@@ -280,7 +289,7 @@ def get_active_DOF_rest_forces(row_num):
             if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
                 rhs[row_num * 2 + 0] = 0
                 rhs[row_num * 2 + 1] = gravity * grid_mass[i, j]
-                row_num = row_num + 1
+                row_num += 1
     return rhs
 
 
@@ -352,57 +361,89 @@ def verify_global_solver(c):
 
     test_particle_to_grid_static()
 
-    with Progress() as progress:
-        task = progress.add_task("Verifying global solver", total=grid_dimensions)
-        for i in range(grid_dimensions):
-            for j in range(0, grid_dimensions):
-                if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
-                    if not np.isclose(grid_velocity[i, j][0], 0, atol=1e-6):
-                        progress.console.print(
-                            "Error in global step: ", i, j, grid_velocity[i, j][0] - 0
-                        )
-                    if not np.isclose(
-                        grid_velocity[i, j][1], gravity * grid_mass[i, j], atol=1e-6
-                    ):
-                        progress.console.print(
-                            "Error in global step: ",
-                            i,
-                            j,
-                            grid_velocity[i, j][1] - gravity * grid_mass[i, j],
-                        )
-            progress.advance(task)
+    # for i in range(grid_dimensions):
+    #     for j in range(0, grid_dimensions):
+    #         if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
+    #             if not np.isclose(grid_velocity[i, j][0], 0, atol=1e-6):
+    #                 job_progress.console.print(
+    #                     "Error in global step: ", i, j, grid_velocity[i, j][0] - 0
+    #                 )
+    #             if not np.isclose(
+    #                 grid_velocity[i, j][1], gravity * grid_mass[i, j], atol=1e-6
+    #             ):
+    #                 job_progress.console.print(
+    #                     "Error in global step: ",
+    #                     i,
+    #                     j,
+    #                     grid_velocity[i, j][1] - gravity * grid_mass[i, j],
+    #                 )
 
 
 def verify_local_solver(res_array, col_num, c):
-    with Progress() as progress:
-        task = progress.add_task("Verifying local solver", total=col_num)
-        for i in range(col_num):
-            affine = evaluate_affine_mapping(
-                res_array[i * 3 + 0], res_array[i * 3 + 1], res_array[i * 3 + 2]
-            )
-            res_vec = np.array([affine[0, 0], affine[1, 1], affine[1, 0]])
-            tar_vec = np.array([c[i * 3], c[i * 3 + 1], c[i * 3 + 2]])
-            if not np.allclose(res_vec, tar_vec, atol=1e-6):
-                progress.console.print(
-                    "Error in local step: ",
-                    c[i * 3],
-                    c[i * 3 + 1],
-                    c[i * 3 + 2],
-                    res_vec,
-                    tar_vec,
-                    res_vec - tar_vec,
-                )
-            progress.advance(task)
+    for i in range(col_num):
+        affine = evaluate_affine_mapping(
+            res_array[i * 3 + 0], res_array[i * 3 + 1], res_array[i * 3 + 2]
+        )
+        res_vec = np.array([affine[0, 0], affine[1, 1], affine[1, 0]])
+        tar_vec = np.array([c[i * 3], c[i * 3 + 1], c[i * 3 + 2]])
+        # if not np.allclose(res_vec, tar_vec, atol=1e-6):
+        #     job_progress.console.print(
+        #         "Error in local step: ",
+        #         c[i * 3],
+        #         c[i * 3 + 1],
+        #         c[i * 3 + 2],
+        #         res_vec,
+        #         tar_vec,
+        #         res_vec - tar_vec,
+        #     )
+        # job_progress.advance(task)
 
 
-def sagfree_init():
+def nn_get_baseline_force_matrix():
+    # 4-dimensional force vector field dimxdimx4
+    # dim 1 and 2 are the uniaxial forces along the y axis
+    # dim 3 is the mass at the grid cell
+    # dim 4 is the binary bit representing occupancy
+    force_matrix = np.zeros((grid_dimensions, grid_dimensions, 4))
+    for i in range(grid_dimensions):
+        for j in range(grid_dimensions):
+            if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
+                force_matrix[i, j, 0] = 0
+                force_matrix[i, j, 1] = gravity * grid_mass[i, j]
+                force_matrix[i, j, 2] = grid_mass[i, j]
+                # Binary bit at this position is a 1 when the field has a value
+                force_matrix[i, j, 3] = 1
+    return force_matrix
+
+
+def nn_get_baseline_F_field():
+    # Deformation field is the averaged vector field of deformation gradients
+    deformation_field = np.zeros((grid_dimensions, grid_dimensions, 4))
+
+    # Cram p2g into the system and map the deformation gradient into the field
+    for p in range(n_particles):
+        base = (position[p] * inv_dx - 0.5).to_numpy().astype(int)
+        for i, j in ti.static(ti.ndrange(3, 3)):
+            offset = np.array([i, j])
+            F_entry = deformation_gradient[p].to_numpy().flatten()
+
+            field_index = base + offset
+
+            if (deformation_field[field_index[0], field_index[1]] != 0).all():
+                # Average the deformation gradients at each position
+                F_entry /= deformation_field[field_index[0], field_index[1]]
+            deformation_field[field_index[0], field_index[1]] = F_entry
+    return deformation_field
+
+
+def sagfree_init(verify=False):
     # get lhs matrix
     particle_to_grid_static()
     row_num, col_num = compute_active_dof_rows_and_cols()
     row, col, dat = get_sparse_matrix_info_2D()
     A_sp = csc_matrix((dat, (row, col)), shape=(row_num * 2, col_num * 3))
 
-    # get rhs vector
+    # Get rhs vector - basically the grid velocity/force as a vector
     b = get_active_DOF_rest_forces(row_num)
 
     # solve the global stage
@@ -426,7 +467,7 @@ def sagfree_init():
 
     # copy the results into F
     col_num = 0
-    for p in track(range(0, n_particles), description="Optimizing Deformation Gradient"):
+    for p in range(n_particles):
         if position[p][0] >= (beam_starting_x + 1) * dx:
             deformation_gradient[p][0, 0] = res_array[col_num * 3 + 0]
             deformation_gradient[p][1, 1] = res_array[col_num * 3 + 1]
@@ -435,7 +476,15 @@ def sagfree_init():
             col_num += 1
 
 
-def main(
+def sagfree_dataset_solve_once():
+    input_force_field = nn_get_baseline_force_matrix()
+    sagfree_init()
+    output_deformation_field = nn_get_baseline_F_field()
+    return input_force_field, output_deformation_field
+
+
+@app.command()
+def simulate(
     solver: str = typer.Argument("solid", help="'solid' or 'fluid' (case sensitive)"),
     quiet: bool = typer.Option(False, help="Display debug logs"),
 ):
@@ -488,5 +537,53 @@ def main(
         frame += 1
 
 
+def check_dir(dirname: Optional[Path]):
+    if not dirname:
+        raise ValueError("Provided dirname is None")
+
+    if not os.path.exists(dirname):
+        raise ValueError(f"Provided dirname {dirname} does not exist")
+
+    if not os.path.isdir(dirname):
+        raise ValueError(f"Provided path {dirname} is not a directory")
+
+
+@app.command()
+def generate(
+    samples: int = typer.Argument(100),
+    input_path: Path = typer.Option(
+        None, help="The path to store the neural network training inputs"
+    ),
+    output_path: Path = typer.Option(
+        None, help="The path to store the neural network training outputs"
+    ),
+):
+    global use_fluid_solver, gravity
+
+    check_dir(input_path)
+    check_dir(output_path)
+
+    filename = (
+        f"ds_E_{youngs_modulus}_v_{poissons_ratio}_grav_{gravity}_vol_{point_volume}"
+    )
+
+    all_inputs = []
+    all_outputs = []
+    for ii in track(range(samples), description="Generating datasets"):
+        initialize()
+        inp, outp = sagfree_dataset_solve_once()
+        all_inputs.append(inp)
+        all_outputs.append(outp)
+
+    all_inputs = np.stack(all_inputs)
+    all_outputs = np.stack(all_outputs)
+
+    print("Inputs", all_inputs.shape, "size", all_inputs.nbytes * 1e-6, "mb")
+    print("Outputs", all_outputs.shape, "size", all_outputs.nbytes * 1e-6, "mb")
+
+    np.savez_compressed(os.path.join(input_path, "inp_" + filename))
+    np.savez_compressed(os.path.join(output_path, "outp_" + filename))
+
+
 if __name__ == "__main__":
-    typer.run(main)
+    app()

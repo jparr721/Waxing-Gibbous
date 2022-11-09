@@ -5,7 +5,7 @@
 Running this is super easy
 ```bash
 $ ./initialize
-$ ./run
+$ ./run simulate
 ```
 And you're done! This code also has some CLI integration, so just run
 
