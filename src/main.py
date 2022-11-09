@@ -7,7 +7,6 @@ import numpy as np
 import taichi as ti
 import typer
 from loguru import logger
-from rich import print
 from rich.console import Console
 from rich.progress import track
 from rich.table import Table
