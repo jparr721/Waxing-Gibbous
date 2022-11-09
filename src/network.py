@@ -52,6 +52,7 @@ def make_model(*, input_shape=(64, 64, _CHANNELS), expo=6, dropout=0.0):
         if dropout > 0:
             block.add(L.SpatialDropout2D(dropout))
 
+        # This import is broken on mac for some reason
         # if bn:
         #     block.add(L.BatchNormalization(axis=-1, epsilon=1e-05, momentum=0.9))
 
