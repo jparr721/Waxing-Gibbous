@@ -27,6 +27,7 @@ _EPOCHS: Final[int] = 1
 _LOSS: Final[str] = "mae"
 _CHANNELS: Final[int] = 4
 _VALIDATION_SPLIT: Final[float] = 0.3
+_LR: Final[float] = 0.001
 
 
 def make_model(*, input_shape=(64, 64, _CHANNELS), expo=6, dropout=0.0):
