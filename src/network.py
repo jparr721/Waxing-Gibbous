@@ -4,9 +4,22 @@ from typing import Final
 import matplotlib.pyplot as plt
 import tensorflow as tf
 from loguru import logger
-from tensorflow.python.keras import Input, Model, Sequential
-from tensorflow.python.keras import layers as L
-from tensorflow.python.keras.callbacks import EarlyStopping, History
+
+from utils import PLATFORM_LINUX, PLATFORM_MAC, platform_is
+
+if platform_is(PLATFORM_MAC):
+    from tensorflow.python.keras import Input, Model, Sequential
+    from tensorflow.python.keras import layers as L
+    from tensorflow.python.keras.callbacks import EarlyStopping, History
+    from tensorflow.python.keras.initializers.initializers_v2 import RandomNormal
+elif platform_is(PLATFORM_LINUX):
+    from tensorflow.keras import Input, Model, Sequential
+    from tensorflow.keras import layers as L
+    from tensorflow.keras.callbacks import EarlyStopping, History
+    from tensorflow.keras.initializers import RandomNormal
+    from tensorflow.keras.optimizers import Adam
+else:
+    raise RuntimeError("INVALID PLATFORM DETECTED")
 
 _MODEL_OUTPUT_PATH: Final[str] = "cnn_model.h5"
 _BATCH_SIZE: Final[int] = 20
@@ -36,6 +49,7 @@ def make_model(*, input_shape=(64, 64, _CHANNELS), expo=6, dropout=0.0):
                     padding=pad,
                     use_bias=True,
                     activation=None,
+                    kernel_initializer=RandomNormal(0.0, 0.2),
                 )
             )
         else:
@@ -53,8 +67,9 @@ def make_model(*, input_shape=(64, 64, _CHANNELS), expo=6, dropout=0.0):
             block.add(L.SpatialDropout2D(dropout))
 
         # This import is broken on mac for some reason
-        # if bn:
-        #     block.add(L.BatchNormalization(axis=-1, epsilon=1e-05, momentum=0.9))
+        if platform_is(PLATFORM_LINUX):
+            if bn:
+                block.add(L.BatchNormalization(axis=-1, epsilon=1e-05, momentum=0.9))
 
         return block
 
@@ -107,7 +122,10 @@ def make_model(*, input_shape=(64, 64, _CHANNELS), expo=6, dropout=0.0):
     dout0 = dec_0(dout1_out0)
 
     model = Model(inputs=inputs, outputs=dout0)
-    model.compile(optimizer="adam", loss=_LOSS)
+    if platform_is(PLATFORM_MAC):
+        model.compile(optimizer="adam", loss=_LOSS)
+    elif platform_is(PLATFORM_LINUX):
+        model.compile(optimizer=Adam(_LR, beta_1=0.5), loss=_LOSS)
     return model
 
 

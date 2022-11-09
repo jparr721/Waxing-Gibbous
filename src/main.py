@@ -16,13 +16,23 @@ from scipy.sparse.linalg import lsqr
 
 from network import make_model, plot, save_model, train_model
 from praxis import *
+from utils import PLATFORM_LINUX, PLATFORM_MAC, platform_is
 
 # Set up rich to MITM all errors
 install()
 
 app = typer.Typer()
 
-ti.init(arch=ti.metal)
+if platform_is(PLATFORM_MAC):
+    ti.init(arch=ti.metal)
+elif platform_is(PLATFORM_LINUX):
+    try:
+        ti.init(arch=ti.gpu)
+    except Exception:
+        logger.info("Falling back to CPU taichi")
+        ti.init(arch=ti.x64)
+else:
+    raise RuntimeError("INVALID PLATFORM DETECTED")
 
 # Flag to activate the fluid solver
 use_fluid_solver = False
