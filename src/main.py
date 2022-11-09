@@ -9,7 +9,7 @@ import typer
 from loguru import logger
 from rich import print
 from rich.console import Console
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, track
+from rich.progress import track
 from rich.table import Table
 from rich.traceback import install
 from scipy.sparse import csc_matrix
@@ -29,15 +29,14 @@ use_fluid_solver = False
 
 # Set the grid padding on the boundary
 PADDING_AMOUNT = 3
+GRID_DIMENSIONS = 64
 
 if use_fluid_solver:
-    grid_dimensions = 32
     beam_starting_x = 3
     beam_starting_y = 3
     beam_width = 20
     beam_height = 6
 else:
-    grid_dimensions = 32
     beam_starting_x = 6
     beam_starting_y = 12
     beam_width = 20
@@ -45,7 +44,7 @@ else:
 
 n_particles = beam_width * beam_height * 4
 
-dx, inv_dx = 1 / float(grid_dimensions), float(grid_dimensions)
+dx, inv_dx = 1 / float(GRID_DIMENSIONS), float(GRID_DIMENSIONS)
 dt = 1e-4
 gravity = 20.0
 
@@ -60,15 +59,15 @@ mu = youngs_modulus / (2 * (1 + poissons_ratio))
 lambda_ = (
     youngs_modulus * poissons_ratio / ((1 + poissons_ratio) * (1 - 2 * poissons_ratio))
 )
-position = ti.Vector.field(2, dtype=float, shape=n_particles)
+positions = ti.Vector.field(2, dtype=float, shape=n_particles)
 velocity = ti.Vector.field(2, dtype=float, shape=n_particles)
 affine_velocity = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)
 deformation_gradient = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)
 color = ti.field(dtype=int, shape=n_particles)
 plastic_deformation = ti.field(dtype=float, shape=n_particles)
-grid_velocity = ti.Vector.field(2, dtype=float, shape=(grid_dimensions, grid_dimensions))
-grid_mass = ti.field(dtype=float, shape=(grid_dimensions, grid_dimensions))
-grid_index = ti.field(dtype=int, shape=(grid_dimensions, grid_dimensions))
+grid_velocity = ti.Vector.field(2, dtype=float, shape=(GRID_DIMENSIONS, GRID_DIMENSIONS))
+grid_mass = ti.field(dtype=float, shape=(GRID_DIMENSIONS, GRID_DIMENSIONS))
+grid_index = ti.field(dtype=int, shape=(GRID_DIMENSIONS, GRID_DIMENSIONS))
 
 
 @ti.kernel
@@ -80,9 +79,9 @@ def clean_grid():
 
 @ti.kernel
 def particle_to_grid():
-    for p in position:
-        base = (position[p] * inv_dx - 0.5).cast(int)
-        fx = position[p] * inv_dx - base.cast(float)
+    for p in positions:
+        base = (positions[p] * inv_dx - 0.5).cast(int)
+        fx = positions[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
         deformation_gradient[p] = (
             ti.Matrix.identity(ti.f32, 2) + dt * affine_velocity[p]
@@ -123,11 +122,11 @@ def grid_update(g: ti.f32):
         # Sticky boundary conditions
         if i < PADDING_AMOUNT and grid_velocity[i, j][0] < 0:
             grid_velocity[i, j][0] = 0
-        if i > grid_dimensions - PADDING_AMOUNT and grid_velocity[i, j][0] > 0:
+        if i > GRID_DIMENSIONS - PADDING_AMOUNT and grid_velocity[i, j][0] > 0:
             grid_velocity[i, j][0] = 0
         if j < PADDING_AMOUNT and grid_velocity[i, j][1] < 0:
             grid_velocity[i, j][1] = 0
-        if j > grid_dimensions - PADDING_AMOUNT and grid_velocity[i, j][1] > 0:
+        if j > GRID_DIMENSIONS - PADDING_AMOUNT and grid_velocity[i, j][1] > 0:
             grid_velocity[i, j][1] = 0
 
         if not use_fluid_solver:
@@ -138,9 +137,9 @@ def grid_update(g: ti.f32):
 
 @ti.kernel
 def grid_to_particle():
-    for p in position:
-        base = (position[p] * inv_dx - 0.5).cast(int)
-        fx = position[p] * inv_dx - base.cast(float)
+    for p in positions:
+        base = (positions[p] * inv_dx - 0.5).cast(int)
+        fx = positions[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1.0) ** 2, 0.5 * (fx - 0.5) ** 2]
         new_v = ti.Vector.zero(ti.f32, 2)
         new_C = ti.Matrix.zero(ti.f32, 2, 2)
@@ -153,7 +152,7 @@ def grid_to_particle():
 
         # Advect the velocity and positions
         velocity[p], affine_velocity[p] = new_v, new_C
-        position[p] += dt * velocity[p]
+        positions[p] += dt * velocity[p]
 
         if use_fluid_solver:
             # Fluid update
@@ -171,7 +170,7 @@ def initialize():
     for i in range(beam_width * 2):
         for j in range(beam_height * 2):
             idx = j + i * beam_height * 2
-            position[idx] = ti.Matrix(
+            positions[idx] = ti.Matrix(
                 [
                     (beam_starting_x + i * 0.5 + ti.random()) * dx,
                     (beam_starting_y + j * 0.5 + ti.random()) * dx,
@@ -185,9 +184,9 @@ def initialize():
 
 @ti.kernel
 def particle_to_grid_static():
-    for p in position:
-        base = (position[p] * inv_dx - 0.5).cast(int)
-        fx = position[p] * inv_dx - base.cast(float)
+    for p in positions:
+        base = (positions[p] * inv_dx - 0.5).cast(int)
+        fx = positions[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
         for i, j in ti.static(ti.ndrange(3, 3)):
             offset = ti.Vector([i, j])
@@ -199,20 +198,20 @@ def particle_to_grid_static():
 
 
 def compute_active_dof_rows_and_cols():
-    for i in range(grid_dimensions):
-        for j in range(grid_dimensions):
+    for i in range(GRID_DIMENSIONS):
+        for j in range(GRID_DIMENSIONS):
             grid_index[i, j] = -1
 
     rn = 0
-    for i in range(0, grid_dimensions):
-        for j in range(0, grid_dimensions):
+    for i in range(0, GRID_DIMENSIONS):
+        for j in range(0, GRID_DIMENSIONS):
             if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
                 grid_index[i, j] = rn
                 rn += 1
 
     cn = 0
     for i in range(0, n_particles):
-        if position[i][0] > (beam_starting_x + 1) * dx:
+        if positions[i][0] > (beam_starting_x + 1) * dx:
             cn += 1
 
     return rn, cn
@@ -221,9 +220,9 @@ def compute_active_dof_rows_and_cols():
 def get_sparse_matrix_info_2D():
     arr_len = 0
     for p in range(n_particles):
-        if position[p][0] > (beam_starting_x + 1) * dx:
-            basex = int(position[p][0] * inv_dx - 0.5)
-            basey = int(position[p][1] * inv_dx - 0.5)
+        if positions[p][0] > (beam_starting_x + 1) * dx:
+            basex = int(positions[p][0] * inv_dx - 0.5)
+            basey = int(positions[p][1] * inv_dx - 0.5)
             for i in range(0, 3):
                 for j in range(0, 3):
                     if (
@@ -240,13 +239,13 @@ def get_sparse_matrix_info_2D():
     arr_len = 0
     col_num = 0
     for p in range(n_particles):
-        if position[p][0] > (beam_starting_x + 1) * dx:
-            basex = int(position[p][0] * inv_dx - 0.5)
-            basey = int(position[p][1] * inv_dx - 0.5)
+        if positions[p][0] > (beam_starting_x + 1) * dx:
+            basex = int(positions[p][0] * inv_dx - 0.5)
+            basey = int(positions[p][1] * inv_dx - 0.5)
             fx = np.array(
                 [
-                    float(position[p][0] * inv_dx - basex),
-                    float(position[p][1] * inv_dx - basey),
+                    float(positions[p][0] * inv_dx - basex),
+                    float(positions[p][1] * inv_dx - basey),
                 ]
             )
             w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
@@ -284,8 +283,8 @@ def get_sparse_matrix_info_2D():
 def get_active_DOF_rest_forces(row_num):
     rhs = np.zeros(row_num * 2)
     row_num = 0
-    for i in range(0, grid_dimensions):
-        for j in range(0, grid_dimensions):
+    for i in range(0, GRID_DIMENSIONS):
+        for j in range(0, GRID_DIMENSIONS):
             if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
                 rhs[row_num * 2 + 0] = 0
                 rhs[row_num * 2 + 1] = gravity * grid_mass[i, j]
@@ -335,9 +334,9 @@ def find_solution(A0):
 
 @ti.kernel
 def test_particle_to_grid_static():
-    for p in position:
-        base = (position[p] * inv_dx - 0.5).cast(int)
-        fx = position[p] * inv_dx - base.cast(float)
+    for p in positions:
+        base = (positions[p] * inv_dx - 0.5).cast(int)
+        fx = positions[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
         affine = deformation_gradient[p]
         for i, j in ti.static(ti.ndrange(3, 3)):
@@ -352,7 +351,7 @@ def verify_global_solver(c):
     clean_grid()
     col_num = 0
     for p in range(0, n_particles):
-        if position[p][0] >= (beam_starting_x + 1) * dx:
+        if positions[p][0] >= (beam_starting_x + 1) * dx:
             deformation_gradient[p][0, 0] = c[col_num * 3 + 0]
             deformation_gradient[p][1, 1] = c[col_num * 3 + 1]
             deformation_gradient[p][0, 1] = c[col_num * 3 + 2]
@@ -365,7 +364,7 @@ def verify_global_solver(c):
     #     for j in range(0, grid_dimensions):
     #         if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
     #             if not np.isclose(grid_velocity[i, j][0], 0, atol=1e-6):
-    #                 job_progress.console.print(
+    #                 j}ob_progress.console.print(
     #                     "Error in global step: ", i, j, grid_velocity[i, j][0] - 0
     #                 )
     #             if not np.isclose(
@@ -404,9 +403,9 @@ def nn_get_baseline_force_matrix():
     # dim 1 and 2 are the uniaxial forces along the y axis
     # dim 3 is the mass at the grid cell
     # dim 4 is the binary bit representing occupancy
-    force_matrix = np.zeros((grid_dimensions, grid_dimensions, 4))
-    for i in range(grid_dimensions):
-        for j in range(grid_dimensions):
+    force_matrix = np.zeros((GRID_DIMENSIONS, GRID_DIMENSIONS, 4))
+    for i in range(GRID_DIMENSIONS):
+        for j in range(GRID_DIMENSIONS):
             if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
                 force_matrix[i, j, 0] = 0
                 force_matrix[i, j, 1] = gravity * grid_mass[i, j]
@@ -418,11 +417,11 @@ def nn_get_baseline_force_matrix():
 
 def nn_get_baseline_F_field():
     # Deformation field is the averaged vector field of deformation gradients
-    deformation_field = np.zeros((grid_dimensions, grid_dimensions, 4))
+    deformation_field = np.zeros((GRID_DIMENSIONS, GRID_DIMENSIONS, 4))
 
     # Cram p2g into the system and map the deformation gradient into the field
     for p in range(n_particles):
-        base = (position[p] * inv_dx - 0.5).to_numpy().astype(int)
+        base = (positions[p] * inv_dx - 0.5).to_numpy().astype(int)
         for i, j in ti.static(ti.ndrange(3, 3)):
             offset = np.array([i, j])
             F_entry = deformation_gradient[p].to_numpy().flatten()
@@ -468,7 +467,7 @@ def sagfree_init(verify=False):
     # copy the results into F
     col_num = 0
     for p in range(n_particles):
-        if position[p][0] >= (beam_starting_x + 1) * dx:
+        if positions[p][0] >= (beam_starting_x + 1) * dx:
             deformation_gradient[p][0, 0] = res_array[col_num * 3 + 0]
             deformation_gradient[p][1, 1] = res_array[col_num * 3 + 1]
             deformation_gradient[p][0, 1] = res_array[col_num * 3 + 2]
@@ -531,7 +530,7 @@ def simulate(
             particle_to_grid()
             grid_update(gravity)
             grid_to_particle()
-        gui.circles(position.to_numpy(), radius=2, color=0xED553B)
+        gui.circles(positions.to_numpy(), radius=2, color=0xED553B)
         gui.show()
         clean_grid()
         frame += 1
@@ -563,26 +562,64 @@ def generate(
     check_dir(input_path)
     check_dir(output_path)
 
-    filename = (
-        f"ds_E_{youngs_modulus}_v_{poissons_ratio}_grav_{gravity}_vol_{point_volume}"
-    )
+    filename = f"ds_E={youngs_modulus}_v={poissons_ratio}_grav={gravity}_vol={point_volume}_samples={samples}"
 
     all_inputs = []
+    all_points = []
     all_outputs = []
     for ii in track(range(samples), description="Generating datasets"):
         initialize()
         inp, outp = sagfree_dataset_solve_once()
+        all_points.append(positions.to_numpy())
         all_inputs.append(inp)
         all_outputs.append(outp)
 
     all_inputs = np.stack(all_inputs)
+    all_points = np.stack(all_points)
     all_outputs = np.stack(all_outputs)
 
-    print("Inputs", all_inputs.shape, "size", all_inputs.nbytes * 1e-6, "mb")
-    print("Outputs", all_outputs.shape, "size", all_outputs.nbytes * 1e-6, "mb")
+    logger.info(f"Inputs shape: {all_inputs.shape} size: {all_inputs.nbytes * 1e-6}mb")
+    logger.info(f"Outputs shape: {all_outputs.shape} size: {all_outputs.nbytes * 1e-6}mb")
 
-    np.savez_compressed(os.path.join(input_path, "inp_" + filename))
-    np.savez_compressed(os.path.join(output_path, "outp_" + filename))
+    input_filename = "inp_" + filename
+    output_filename = "outp_" + filename
+    input_dataset_path = os.path.join(input_path, input_filename)
+    output_dataset_path = os.path.join(output_path, output_filename)
+
+    logger.info(f"Saving to inp: {input_dataset_path}, outp: {output_dataset_path}")
+    matches = list(
+        filter(
+            lambda x: x.startswith(input_filename),
+            os.listdir(input_path),
+        )
+    )
+    logger.debug(f"Searching for existing files in {input_path}")
+    logger.debug(f"Found {len(matches)} matches")
+    if len(matches) > 0:
+        input_dataset_path = Path(str(input_dataset_path) + f"_{len(matches)}")
+        output_dataset_path = Path(str(output_dataset_path) + f"_{len(matches)}")
+        logger.info(
+            f"Found existing file, new paths are {input_dataset_path} and {output_dataset_path}"
+        )
+
+    np.savez_compressed(input_dataset_path, data=all_inputs, points=all_points)
+    np.savez_compressed(output_dataset_path, data=all_outputs)
+
+
+@app.command(help="Train the neural network", rich_help_panel="Neural Network Commands")
+def train(input_file: Path, output_file: Path):
+    logger.info("Opening datasets")
+
+    if not os.path.exists(input_file):
+        raise ValueError(f"Provided path {input_file} does not exist")
+    if not os.path.exists(output_file):
+        raise ValueError(f"Provided path {output_file} does not exist")
+
+    input_dataset = np.load(input_file)["data"]
+    output_dataset = np.load(output_file)["data"]
+
+    logger.info(f"Got input dataset with shape {input_dataset.shape}")
+    logger.info(f"Got output dataset with shape {output_dataset.shape}")
 
 
 if __name__ == "__main__":
