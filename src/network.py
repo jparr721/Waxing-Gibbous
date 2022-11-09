@@ -10,9 +10,9 @@ from tensorflow.python.keras.callbacks import EarlyStopping, History
 
 _MODEL_OUTPUT_PATH: Final[str] = "cnn_model.h5"
 _BATCH_SIZE: Final[int] = 20
-_EPOCHS: Final[int] = 50
+_EPOCHS: Final[int] = 1
 _LOSS: Final[str] = "mae"
-_CHANNELS: Final[int] = 3
+_CHANNELS: Final[int] = 4
 _VALIDATION_SPLIT: Final[float] = 0.3
 
 
@@ -52,8 +52,8 @@ def make_model(*, input_shape=(64, 64, _CHANNELS), expo=6, dropout=0.0):
         if dropout > 0:
             block.add(L.SpatialDropout2D(dropout))
 
-        if bn:
-            block.add(tf.nn.BatchNormalization(axis=-1, epsilon=1e-05, momentum=0.9))
+        # if bn:
+        #     block.add(L.BatchNormalization(axis=-1, epsilon=1e-05, momentum=0.9))
 
         return block
 
@@ -110,23 +110,16 @@ def make_model(*, input_shape=(64, 64, _CHANNELS), expo=6, dropout=0.0):
     return model
 
 
-def train_model(model: Model, show_plots=False, watch_ram_usage=True):
-    # TODO fill later
-    x = None
-    y = None
-    try:
-        history = model.fit(
-            x,
-            y,
-            epochs=_EPOCHS,
-            batch_size=_BATCH_SIZE,
-            validation_split=_VALIDATION_SPLIT,
-            callbacks=[EarlyStopping(patience=5, restore_best_weights=True)],
-        )
-    except Exception as e:
-        raise e
-
-    return model
+def train_model(model: Model, x, y):
+    history = model.fit(
+        x,
+        y,
+        epochs=_EPOCHS,
+        batch_size=_BATCH_SIZE,
+        validation_split=_VALIDATION_SPLIT,
+        callbacks=[EarlyStopping(patience=5, restore_best_weights=True)],
+    )
+    return history
 
 
 def plot(history: History):

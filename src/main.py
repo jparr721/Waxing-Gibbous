@@ -15,6 +15,7 @@ from rich.traceback import install
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import lsqr
 
+from network import make_model, plot, save_model, train_model
 from praxis import *
 
 # Set up rich to MITM all errors
@@ -586,7 +587,6 @@ def generate(
     input_dataset_path = os.path.join(input_path, input_filename)
     output_dataset_path = os.path.join(output_path, output_filename)
 
-    logger.info(f"Saving to inp: {input_dataset_path}, outp: {output_dataset_path}")
     matches = list(
         filter(
             lambda x: x.startswith(input_filename),
@@ -598,10 +598,8 @@ def generate(
     if len(matches) > 0:
         input_dataset_path = Path(str(input_dataset_path) + f"_{len(matches)}")
         output_dataset_path = Path(str(output_dataset_path) + f"_{len(matches)}")
-        logger.info(
-            f"Found existing file, new paths are {input_dataset_path} and {output_dataset_path}"
-        )
 
+    logger.info(f"Saving to inp: {input_dataset_path}, outp: {output_dataset_path}")
     np.savez_compressed(input_dataset_path, data=all_inputs, points=all_points)
     np.savez_compressed(output_dataset_path, data=all_outputs)
 
@@ -620,6 +618,10 @@ def train(input_file: Path, output_file: Path):
 
     logger.info(f"Got input dataset with shape {input_dataset.shape}")
     logger.info(f"Got output dataset with shape {output_dataset.shape}")
+
+    model = make_model(dropout=0.3)
+    history = train_model(model, input_dataset, output_dataset)
+    plot(history)
 
 
 if __name__ == "__main__":
