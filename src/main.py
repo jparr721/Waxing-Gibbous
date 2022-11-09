@@ -605,7 +605,12 @@ def generate(
 
 
 @app.command(help="Train the neural network", rich_help_panel="Neural Network Commands")
-def train(input_file: Path, output_file: Path):
+def train(
+    input_file: Path = typer.Argument(None, help="The path to read the input data from"),
+    output_file: Path = typer.Argument(
+        None, help="The path to read the output data from"
+    ),
+):
     logger.info("Opening datasets")
 
     if not os.path.exists(input_file):
@@ -622,6 +627,7 @@ def train(input_file: Path, output_file: Path):
     model = make_model(dropout=0.3)
     history = train_model(model, input_dataset, output_dataset)
     plot(history)
+    save_model(model)
 
 
 if __name__ == "__main__":
