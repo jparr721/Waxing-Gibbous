@@ -22,7 +22,7 @@ else:
     raise RuntimeError("INVALID PLATFORM DETECTED")
 
 _MODEL_OUTPUT_PATH: Final[str] = "cnn_model.h5"
-_BATCH_SIZE: Final[int] = 20
+_BATCH_SIZE: Final[int] = 50
 _EPOCHS: Final[int] = 1000
 _LOSS: Final[str] = "mae"
 _CHANNELS: Final[int] = 4
@@ -137,7 +137,7 @@ def train_model(model: Model, x, y):
         epochs=_EPOCHS,
         batch_size=_BATCH_SIZE,
         validation_split=_VALIDATION_SPLIT,
-        callbacks=[EarlyStopping(patience=5, restore_best_weights=True)],
+        callbacks=[EarlyStopping(patience=10, restore_best_weights=True)],
     )
     return history
 

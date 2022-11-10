@@ -8,7 +8,7 @@ import taichi as ti
 import typer
 from loguru import logger
 from rich.console import Console
-from rich.progress import track
+from rich.progress import Progress, track
 from rich.table import Table
 from rich.traceback import install
 from scipy.sparse import csc_matrix
@@ -47,9 +47,9 @@ if use_fluid_solver:
     beam_width = 20
     beam_height = 6
 else:
-    beam_starting_x = 6
-    beam_starting_y = 12
-    beam_width = 20
+    beam_starting_x = 12
+    beam_starting_y = 20
+    beam_width = 30
     beam_height = 6
 
 n_particles = beam_width * beam_height * 4
@@ -370,42 +370,47 @@ def verify_global_solver(c):
 
     test_particle_to_grid_static()
 
-    # for i in range(grid_dimensions):
-    #     for j in range(0, grid_dimensions):
-    #         if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
-    #             if not np.isclose(grid_velocity[i, j][0], 0, atol=1e-6):
-    #                 j}ob_progress.console.print(
-    #                     "Error in global step: ", i, j, grid_velocity[i, j][0] - 0
-    #                 )
-    #             if not np.isclose(
-    #                 grid_velocity[i, j][1], gravity * grid_mass[i, j], atol=1e-6
-    #             ):
-    #                 job_progress.console.print(
-    #                     "Error in global step: ",
-    #                     i,
-    #                     j,
-    #                     grid_velocity[i, j][1] - gravity * grid_mass[i, j],
-    #                 )
+    with Progress() as progress:
+        task = progress.add_task("Verifying global solution step", total=GRID_DIMENSIONS)
+        for i in range(GRID_DIMENSIONS):
+            for j in range(0, GRID_DIMENSIONS):
+                if grid_mass[i, j] > 0 and i >= beam_starting_x + PADDING_AMOUNT:
+                    if not np.isclose(grid_velocity[i, j][0], 0, atol=1e-6):
+                        progress.console.print(
+                            "Error in global step: ", i, j, grid_velocity[i, j][0] - 0
+                        )
+                    if not np.isclose(
+                        grid_velocity[i, j][1], gravity * grid_mass[i, j], atol=1e-6
+                    ):
+                        progress.console.print(
+                            "Error in global step: ",
+                            i,
+                            j,
+                            grid_velocity[i, j][1] - gravity * grid_mass[i, j],
+                        )
+            progress.advance(task)
 
 
 def verify_local_solver(res_array, col_num, c):
-    for i in range(col_num):
-        affine = evaluate_affine_mapping(
-            res_array[i * 3 + 0], res_array[i * 3 + 1], res_array[i * 3 + 2]
-        )
-        res_vec = np.array([affine[0, 0], affine[1, 1], affine[1, 0]])
-        tar_vec = np.array([c[i * 3], c[i * 3 + 1], c[i * 3 + 2]])
-        # if not np.allclose(res_vec, tar_vec, atol=1e-6):
-        #     job_progress.console.print(
-        #         "Error in local step: ",
-        #         c[i * 3],
-        #         c[i * 3 + 1],
-        #         c[i * 3 + 2],
-        #         res_vec,
-        #         tar_vec,
-        #         res_vec - tar_vec,
-        #     )
-        # job_progress.advance(task)
+    with Progress() as progress:
+        task = progress.add_task("Verifying local solution step", total=col_num)
+        for i in range(col_num):
+            affine = evaluate_affine_mapping(
+                res_array[i * 3 + 0], res_array[i * 3 + 1], res_array[i * 3 + 2]
+            )
+            res_vec = np.array([affine[0, 0], affine[1, 1], affine[1, 0]])
+            tar_vec = np.array([c[i * 3], c[i * 3 + 1], c[i * 3 + 2]])
+            if not np.allclose(res_vec, tar_vec, atol=1e-6):
+                progress.console.print(
+                    "Error in local step: ",
+                    c[i * 3],
+                    c[i * 3 + 1],
+                    c[i * 3 + 2],
+                    res_vec,
+                    tar_vec,
+                    res_vec - tar_vec,
+                )
+            progress.advance(task)
 
 
 def nn_get_baseline_force_matrix():
@@ -459,7 +464,10 @@ def sagfree_init(verify=False):
     c = solve_least_squares(A_sp, b)
 
     # verify results from the global stage
-    verify_global_solver(c)
+    if verify:
+        verify_global_solver(c)
+    else:
+        clean_grid()
 
     # solve the local stage
     res_array = np.zeros(col_num * 3)
@@ -472,7 +480,8 @@ def sagfree_init(verify=False):
         res_array[i * 3 + 2] = res[2]
 
     # verify results from the local stage
-    verify_local_solver(res_array, col_num, c)
+    if verify:
+        verify_local_solver(res_array, col_num, c)
 
     # copy the results into F
     col_num = 0
@@ -510,7 +519,7 @@ def simulate(
         logger.add(sys.stderr, level="INFO")
 
     initialize()
-    sagfree_init()
+    sagfree_init(True)
     gui = ti.GUI("Sagfree elastic beam", res=512, background_color=0x222222)
 
     frame = 0

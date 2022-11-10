@@ -133,3 +133,4 @@ dmypy.json
 
 # dataset stuff
 dataset/*
+!dataset/.gitkeep
