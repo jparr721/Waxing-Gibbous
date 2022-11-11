@@ -13,6 +13,7 @@ from rich.table import Table
 from rich.traceback import install
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import lsqr
+from taichi.lang.util import taichi_scope
 
 from network import make_model, plot, save_model, train_model
 from praxis import *
@@ -59,7 +60,7 @@ dt = 1e-4
 gravity = 20.0
 
 point_volume = dx * 0.5
-point_density = 1
+point_density = 2
 p_mass = point_volume * point_density
 
 youngs_modulus = 1_000
@@ -176,20 +177,37 @@ def grid_to_particle():
 
 
 @ti.kernel
-def initialize():
+def random_point_rectangle():
     for i in range(beam_width * 2):
         for j in range(beam_height * 2):
             idx = j + i * beam_height * 2
             positions[idx] = ti.Matrix(
                 [
+                    # ti.random(),
+                    # ti.random(),
                     (beam_starting_x + i * 0.5 + ti.random()) * dx,
                     (beam_starting_y + j * 0.5 + ti.random()) * dx,
                 ]
             )
+
+
+@ti.kernel
+def initialize_auxiliary_vars():
+    for i in range(beam_width * 2):
+        for j in range(beam_height * 2):
+            idx = j + i * beam_height * 2
             color[idx] = 1
             velocity[idx] = ti.Matrix([0, 0])
             deformation_gradient[idx] = ti.Matrix([[1, 0], [0, 1]])
             plastic_deformation[idx] = 1
+
+
+def initialize(shape="random_rectangle"):
+    initialize_auxiliary_vars()
+    if shape == "random_rectangle":
+        random_point_rectangle()
+    else:
+        raise ValueError(f"Shape name {shape} not supported")
 
 
 @ti.kernel
