@@ -13,7 +13,6 @@ from rich.table import Table
 from rich.traceback import install
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import lsqr
-from taichi.lang.util import taichi_scope
 
 from network import make_model, plot, save_model, train_model
 from praxis import *
@@ -48,9 +47,9 @@ if use_fluid_solver:
     beam_width = 20
     beam_height = 6
 else:
-    beam_starting_x = 12
-    beam_starting_y = 20
-    beam_width = 30
+    beam_starting_x = 3
+    beam_starting_y = np.random.randint(3, 50)
+    beam_width = np.random.randint(10, 50)
     beam_height = 6
 
 n_particles = beam_width * beam_height * 4
@@ -183,8 +182,6 @@ def random_point_rectangle():
             idx = j + i * beam_height * 2
             positions[idx] = ti.Matrix(
                 [
-                    # ti.random(),
-                    # ti.random(),
                     (beam_starting_x + i * 0.5 + ti.random()) * dx,
                     (beam_starting_y + j * 0.5 + ti.random()) * dx,
                 ]
@@ -594,7 +591,7 @@ def generate(
         None, help="The path to store the neural network training outputs"
     ),
 ):
-    global use_fluid_solver, gravity
+    global use_fluid_solver, gravity, beam_starting_x, beam_starting_y, beam_width, beam_height
 
     check_dir(input_path)
     check_dir(output_path)
@@ -604,12 +601,20 @@ def generate(
     all_inputs = []
     all_points = []
     all_outputs = []
+    all_params = []
     for ii in track(range(samples), description="Generating datasets"):
+        beam_starting_x = 3
+        beam_starting_y = np.random.randint(3, 50)
+        beam_width = np.random.randint(10, 50)
+        beam_height = 6
         initialize()
         inp, outp = sagfree_dataset_solve_once()
         all_points.append(positions.to_numpy())
         all_inputs.append(inp)
         all_outputs.append(outp)
+        all_params.append(
+            np.array([beam_starting_x, beam_starting_y, beam_width, beam_height])
+        )
 
     all_inputs = np.stack(all_inputs)
     all_points = np.stack(all_points)
@@ -636,7 +641,9 @@ def generate(
         output_dataset_path = Path(str(output_dataset_path) + f"_{len(matches)}")
 
     logger.info(f"Saving to inp: {input_dataset_path}, outp: {output_dataset_path}")
-    np.savez_compressed(input_dataset_path, data=all_inputs, points=all_points)
+    np.savez_compressed(
+        input_dataset_path, data=all_inputs, points=all_points, params=all_params
+    )
     np.savez_compressed(output_dataset_path, data=all_outputs)
 
 
