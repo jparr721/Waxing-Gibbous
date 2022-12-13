@@ -49,13 +49,14 @@ if use_fluid_solver:
 else:
     beam_starting_x = 3
     beam_starting_y = np.random.randint(3, 50)
-    beam_width = np.random.randint(10, 50)
+    # beam_width = np.random.randint(10, 50)
+    beam_width = 50
     beam_height = 6
 
 n_particles = beam_width * beam_height * 4
 
 dx, inv_dx = 1 / float(GRID_DIMENSIONS), float(GRID_DIMENSIONS)
-dt = 1e-4
+dt = 1e-7
 gravity = 20.0
 
 point_volume = dx * 0.5
